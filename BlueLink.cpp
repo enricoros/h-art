@@ -29,7 +29,7 @@ bool BlueLink::readPacket(byte *destBuffer, int maxLength) {
         byte syncByte = (byte) m_btSerial->read();
         if (syncByte != 0xA5) {
             // ERROR: we were unsynced
-            CONSOLE_ADD("e21: ");
+            CONSOLE_ADD("bt_unsync: ");
             CONSOLE_LINE((int) syncByte);
             // try the next
             continue;

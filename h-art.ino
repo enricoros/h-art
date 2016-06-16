@@ -19,7 +19,7 @@
 
 // configuration
 #define APP_REPLAY_DEMO_DATA
-
+#define MASTER_LOOP_DELAY     2  // 2ms = 500Hz
 
 
 /**
@@ -39,22 +39,20 @@ public:
     }
 
     int analogReadSample() {
-        delay(1000 / DEMOMODE_SAMPLES_FREQUENCY);
         int val = m_demoTrace[m_readIdx];
         if (++m_readIdx >= DEMOMODE_SAMPLES_COUNT)
             m_readIdx = 0;
+        delay(1000 / DEMOMODE_SAMPLES_FREQUENCY - MASTER_LOOP_DELAY);
         return val;
     }
 
     void captureTrace() {
-        // 5 seconds delay
         CONSOLE_ADD("Capturing... ");
         for (int i = 5; i > 0; i--) {
             delay(1000);
             CONSOLE_ADD(i);
             CONSOLE_ADD(".. ");
         }
-        // capture
         for (int i = 0; i < DEMOMODE_SAMPLES_COUNT; i++) {
             m_demoTrace[i] = analogRead(A2);
             delay(1000 / DEMOMODE_SAMPLES_FREQUENCY);
@@ -129,14 +127,28 @@ void setup() {
 #endif
 }
 
+// slave configuration
+bool sCaptureEnabled;
+int sSamplingFrequency;
+int sReportingFrequency;
+int sSamplesPerReport;
+bool sFilterAverage;
+int sFilterAverageLength;
+bool tmp_checkFuel=false;
+int tmp_fuelSkipper=2000;
+// runtime globals
+byte sBTCommandBuffer[4];
 
-bool sLastDiscLeft;
-bool sLastDiscRight;
-int sLastPulseVal;
+bool readConsoleCommand(Stream *stream);
+bool executeCommandPacket(const byte *command);
 
 void loop() {
-    /* DEMO recording
-    if (sDemoMode) {
+    // uncomment to enable a direct talk from the USB Console to the Bluetooth Modem
+    //Streams::cross(&APP_BLUETOOTH_SERIAL, &APP_CONSOLE);
+    //return;
+
+    // uncomment to enable signal recording with console output/plot
+    /*if (sDemoMode) {
         sDemoMode->captureTrace();
         sDemoMode->printTraceAsArray();
         sDemoMode->printTraceAsPlot();
@@ -144,12 +156,30 @@ void loop() {
         return;
     }*/
 
-    //sFuelGauge->showChargePulsedOnQduino(sQduino, 400);
-    //sFuelGauge->showChargeOnConsole(&APP_CONSOLE);
+    // no local 'pin' configuration
 
-    // uncomment this to talk from the USB Console to the Bluetooth Modem
-    //Streams::cross(&APP_BLUETOOTH_SERIAL, &APP_CONSOLE);
+    // single mode of operation: configured via bluetooth
 
+    // check the BT serial for new commands
+    bool hasNewCommand = false;
+    if (sBlueLink->readPacket(sBTCommandBuffer, 4))
+        hasNewCommand = true;
+
+#if defined(APP_CONSOLE)
+    // check the console for new commands
+    if (!hasNewCommand)
+        hasNewCommand = readConsoleCommand(&APP_CONSOLE, sBTCommandBuffer);
+#endif
+
+    // execute a command, when received (and blink the LED)
+    if (hasNewCommand)
+        if (executeCommandPacket(sBTCommandBuffer))
+            sQduino->setRGB(RED);
+
+    // perform the current Mode/Task/Operation
+    bool sLastDiscLeft;
+    bool sLastDiscRight;
+    int sLastPulseVal;
     if (sDemoMode) {
         sLastDiscLeft = false;
         sLastDiscRight = false;
@@ -158,16 +188,90 @@ void loop() {
         sLastDiscLeft = digitalRead(A0);
         sLastDiscRight = digitalRead(A1);
         sLastPulseVal = 1023 - analogRead(A2);
-        delay(2); // upper limit to 500Hz
     }
-
-    //CONSOLE_LINE(sLastPulseVal);
     
     if (sAvg) {
         sAvg->push(sLastPulseVal);
         sLastPulseVal = sAvg->computeAvg();
     }
 
+    //CONSOLE_LINE(sLastPulseVal);
+    
     //sBlueLink->rawPrintValue(pulseVal);
+
+    // if enable, check continuously for fuel
+    if (tmp_checkFuel && !--tmp_fuelSkipper) {
+        sFuelGauge->showChargePulsedOnQduino(sQduino, 400);
+        sFuelGauge->showChargeOnConsole(&APP_CONSOLE);
+        tmp_fuelSkipper = 2000;
+    }
+
+    // upper limit to frequency
+    delay(MASTER_LOOP_DELAY);
+
+    // save energy, stop the LED now
+    if (hasNewCommand)
+        sQduino->ledOff();
+}
+
+bool executeCommandPacket(const byte *msg) {
+    const byte rCmd    = msg[0];
+    const byte rTarget = msg[1];
+    const byte rValue1 = msg[2];
+    const byte rValue2 = msg[3];
+
+    switch (rCmd) {
+    // C: 01 -> set ...(target: 1,2, rValue1: ... [0..200])
+    case 0x01:
+        switch (rTarget) {
+        case 1: return true;
+        case 2: return true;
+        }; break;
+
+    // C: 02 -> set ears pairs (target ignored)
+    case 0x02: {
+        } return true;
+
+    // C: 03 -> read Battery Level
+    case 0x03:
+        if (sFuelGauge) {
+            int value = sFuelGauge->measureChargeSinceLastReset();
+            // TODO: SEND IT BACK
+            //sFuelGauge->showChargePulsedOnQduino(sQduino, 400);
+            //sFuelGauge->showChargeOnConsole(&APP_CONSOLE);
+        } return true;
+        
+    // C: 04 -> set Variables
+    case 0x04:
+        switch (rTarget) {
+        case 1: tmp_checkFuel = rValue1; return true;
+        }; break;
+    }
+
+    // bad command
+    CONSOLE_ADD("bt_bad_cmd: ");
+    CONSOLE_LINE((int)rCmd);
+    return false;
+}
+
+bool readConsoleCommand(Stream *stream, byte *cmdBuffer) {
+    while (stream->available()) {
+        char c = (char)stream->read();
+        switch (c) {
+        case 'f': case 'F':
+            cmdBuffer[0] = 4; cmdBuffer[1] =   1; cmdBuffer[2] = tmp_checkFuel ? 0 : 1; return true;
+        case 'u': case 'U':
+            cmdBuffer[0] = 2; cmdBuffer[2] = 200; cmdBuffer[3] = 200; return true;
+        case 'm': case 'M':
+            cmdBuffer[0] = 2; cmdBuffer[2] = 100; cmdBuffer[3] = 100; return true;
+        case 'd': case 'D':
+            cmdBuffer[0] = 5; cmdBuffer[2] =   0; cmdBuffer[3] =   0; return true;
+        case 'l': case 'L':
+            cmdBuffer[0] = 2; cmdBuffer[2] = 200; cmdBuffer[3] =  50; return true;
+        case 'r': case 'R':
+            cmdBuffer[0] = 2; cmdBuffer[2] =  50; cmdBuffer[3] = 200; return true;
+        }
+    }
+    return false;
 }
 

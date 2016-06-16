@@ -17,14 +17,14 @@ public:
     FuelGauge();
     ~FuelGauge();
 
-    int showChargeOnConsole(Stream *);
+    int measureChargeSinceLastReset();
 
-    int showChargePulsedOnQduino(qduino *q, int pulseDuration);
+    void showChargeOnConsole(Stream *);
+
+    void showChargePulsedOnQduino(qduino *q, int pulseDuration);
 
 private:
     fuelGauge *m_battery;
-
-    int measureChargeSinceLastReset();
 
     void pulseLed(qduino *q, int n, int pulseLengthMs, int color);
 };
