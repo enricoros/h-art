@@ -17,49 +17,9 @@
 // signal processing
 #include "Signals.h"
 
+// configuration
+#define APP_REPLAY_DEMO_DATA
 
-qduino *sQduino = 0;
-BlueLink *sBlueLink = 0;
-Averager *sAvg = 0;
-FuelGauge *sFuelGauge = 0;
-
-void setup() {
-    // shorted to 3.3V or GND
-    pinMode(6, INPUT);
-    pinMode(8, INPUT);
-    pinMode(9, INPUT);
-    pinMode(12, INPUT);
-
-    // let the peripherals rest
-    delay(2000);
-
-    // console
-    Console::init();
-    CONSOLE_LINE("HeartBeat Booting...");
-
-    // init QDuino Fuel gauge and LED
-    CONSOLE_LINE(" * init QDuino");
-    sQduino = new qduino();
-    sQduino->setRGB(RED);
-    sFuelGauge = new FuelGauge();
-
-    // init i/os (and let them settle)
-    CONSOLE_LINE(" * init I/O");
-    //setupAndExplainPullup(LILY_PIN_MODE_ANALOG_A,   "Analog A mode ");
-    delay(100);
-
-    // init Bluetooth
-    CONSOLE_LINE(" * init BT");
-    sBlueLink = new BlueLink(&APP_BLUETOOTH_SERIAL);
-    sBlueLink->init();
-
-    // init other
-    sAvg = new Averager(10);
-
-    // complete Boot
-    CONSOLE_LINE("APP Ready!");
-    sQduino->setRGB(GREEN);
-}
 
 
 /**
@@ -67,7 +27,6 @@ void setup() {
  */
 #define DEMOMODE_SAMPLES_COUNT      170
 #define DEMOMODE_SAMPLES_FREQUENCY  200
-
 class DemoMode {
 private:
     // nice trace, 200Hz, 170 samples
@@ -80,6 +39,7 @@ public:
     }
 
     int analogReadSample() {
+        delay(1000 / DEMOMODE_SAMPLES_FREQUENCY);
         int val = m_demoTrace[m_readIdx];
         if (++m_readIdx >= DEMOMODE_SAMPLES_COUNT)
             m_readIdx = 0;
@@ -119,23 +79,70 @@ public:
 };
 
 
-DemoMode *demo = new DemoMode();
+qduino *sQduino = 0;
+BlueLink *sBlueLink = 0;
+Averager *sAvg = 0;
+FuelGauge *sFuelGauge = 0;
+DemoMode *sDemoMode = 0;
+
+
+void setup() {
+    // shorted to 3.3V or GND
+    pinMode(6, INPUT);
+    pinMode(8, INPUT);
+    pinMode(9, INPUT);
+    pinMode(12, INPUT);
+
+    // let the peripherals rest, use this time for re-flashing in case the cpu hangs after this
+    delay(2000);
+
+    // console
+    Console::init();
+    CONSOLE_LINE("HeartBeat Booting...");
+
+    // init QDuino Fuel gauge and LED
+    CONSOLE_LINE(" * init QDuino");
+    sQduino = new qduino();
+    sQduino->setRGB(RED);
+    sFuelGauge = new FuelGauge();
+
+    // init i/os (and let them settle)
+    CONSOLE_LINE(" * init I/O");
+    //setupAndExplainPullup(LILY_PIN_MODE_ANALOG_A,   "Analog A mode ");
+    delay(100);
+
+    // init Bluetooth
+    CONSOLE_LINE(" * init BT");
+    sBlueLink = new BlueLink(&APP_BLUETOOTH_SERIAL);
+    sBlueLink->init();
+
+    // init other
+    sAvg = new Averager(10);
+
+    // complete Boot
+    CONSOLE_LINE("HeartBeat ready.");
+    sQduino->setRGB(GREEN);
+
+    // TEMP - FIXME - actually start the demo mode (replays recorded data)
+#if defined(APP_REPLAY_DEMO_DATA)
+    sDemoMode = new DemoMode();
+#endif
+}
+
+
 bool sLastDiscLeft;
 bool sLastDiscRight;
 int sLastPulseVal;
 
 void loop() {
     /* DEMO recording
-    if (demo) {
-        demo->captureTrace();
-        demo->printTraceAsArray();
-        demo->printTraceAsPlot();
+    if (sDemoMode) {
+        sDemoMode->captureTrace();
+        sDemoMode->printTraceAsArray();
+        sDemoMode->printTraceAsPlot();
         delay(1000);
         return;
     }*/
-
-    // upper limit to 500Hz
-    delay(2);
 
     //sFuelGauge->showChargePulsedOnQduino(sQduino, 400);
     //sFuelGauge->showChargeOnConsole(&APP_CONSOLE);
@@ -143,17 +150,18 @@ void loop() {
     // uncomment this to talk from the USB Console to the Bluetooth Modem
     //Streams::cross(&APP_BLUETOOTH_SERIAL, &APP_CONSOLE);
 
-    if (demo) {
+    if (sDemoMode) {
         sLastDiscLeft = false;
         sLastDiscRight = false;
-        sLastPulseVal = 1023 - demo->analogReadSample();
+        sLastPulseVal = 1023 - sDemoMode->analogReadSample();
     } else {
         sLastDiscLeft = digitalRead(A0);
         sLastDiscRight = digitalRead(A1);
         sLastPulseVal = 1023 - analogRead(A2);
+        delay(2); // upper limit to 500Hz
     }
 
-    CONSOLE_LINE(sLastPulseVal);
+    //CONSOLE_LINE(sLastPulseVal);
     
     if (sAvg) {
         sAvg->push(sLastPulseVal);
