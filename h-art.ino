@@ -1,310 +1,27 @@
 /* Enrico's Code */
 
 #include "Arduino.h"
-#include "Wire.h"
-#include "Qduino.h"
 
-// misc constants
-#define APP_CONSOLE           Serial
-#define APP_CONSOLE_SPEED     9600
+// Console - configured in Console.h
+#include "Console.h"
+
+// Bluetooth operation
+#include "BlueLink.h"
 
 #define APP_BLUETOOTH_SERIAL  Serial1
 
-// console types implementation
-#if defined(APP_CONSOLE)
-Stream *_Console = 0;
-#define CONSOLE_ADD(...)        _Console->print(__VA_ARGS__)
-#define CONSOLE_LINE(...)       _Console->println(__VA_ARGS__)
+// QDuino specific
+#include "Qduino.h"
+#include "QD_FuelGauge.h"
 
-void initConsole() {
-    APP_CONSOLE.begin(APP_CONSOLE_SPEED);
-    _Console = &APP_CONSOLE;
-}
-
-#else
-#undef CONSOLE_SOFTWARE
-#define CONSOLE_ADD(...)
-#define CONSOLE_LINE(...)
-void initConsole() {}
-#endif
+// signal processing
+#include "Signals.h"
 
 
-/*
- * will use the global 'Wire', embed a 'fuelGauge' instance
- */
-class EGauge {
-public:
-    void setup() {
-        Wire.begin();
-        m_battery.setup();  // setup fuel gauge (includes reset)
-    }
-
-    int showChargeOnConsole() {
-        int charge = measureChargeSinceLastReset();
-        CONSOLE_ADD(charge);
-        CONSOLE_LINE("%");
-    }
-
-    int showChargePulsedOnLed(qduino *q, int pulseDuration) {
-        int charge = measureChargeSinceLastReset();
-        if (charge >= 50)
-            pulseLed(q, (charge - 50) / 10 + 1, pulseDuration, GREEN);
-        else
-            pulseLed(q, (50 - charge) / 10 + 1, pulseDuration, RED);
-    }
-
-private:
-    fuelGauge m_battery;
-
-    int measureChargeSinceLastReset() {
-        int charge = m_battery.chargePercentage();  // get %
-        //m_battery.reset();  // reset for next data request
-        return charge;
-    }
-
-    void pulseLed(qduino *q, int n, int pulseLengthMs, COLORS color = GREEN) {
-        while (n--) {
-            q->setRGB(color);
-            delay(pulseLengthMs / 2);
-            q->ledOff();
-            delay(pulseLengthMs / 2);
-        }
-    }
-};
-
-/**
- * @brief The BlueLink class communicates via a Blueetooth dongle
- *
- * The serial packet is comprised by: { 0xA5, B1, B2, B3, B4 },
- *   where the first is the sync byte (in case we lost it), and the other
- *   come from the packet encoding standard.
- */
-class BlueLink {
-    HardwareSerial *m_btSerial;
-public:
-    BlueLink(HardwareSerial *btSerial)
-            : m_btSerial(btSerial) {
-    }
-
-    void init() const {
-        // check if the user requested to reconfigure
-//        if (digitalRead(LILY_PIN_BT_RECONFIG) == LOW)
-        //          initReconfigure();
-        //      else
-        initNormal();
-    }
-
-    void rawPrintValue(int value) const {
-        m_btSerial->print(value);
-        m_btSerial->print(" ");
-    }
-
-    /**
-     * @brief readPacket Decodes an incoming instruction packet transmission. Enrico's standard.
-     * @param destBuffer a pointer to at least maxLength chars
-     * @param maxLength of the destination command (the src packet has 1 sync byte too)
-     * @return true if one or more packets have been decoded (just the last is kept though)
-     */
-    bool readPacket(byte *destBuffer, int maxLength) {
-        // we need maxLength + 1 sync byte
-        while (m_btSerial->available() >= (maxLength + 1)) {
-            // validate the sync byte
-            byte syncByte = (byte) m_btSerial->read();
-            if (syncByte != 0xA5) {
-                // ERROR: we were unsynced
-                CONSOLE_ADD("e21: ");
-                CONSOLE_LINE((int) syncByte);
-                // try the next
-                continue;
-            }
-
-            // read the next 4 bytes
-            destBuffer[0] = (byte) m_btSerial->read();
-            destBuffer[1] = (byte) m_btSerial->read();
-            destBuffer[2] = (byte) m_btSerial->read();
-            destBuffer[3] = (byte) m_btSerial->read();
-            // we're ok for further processing
-            return true;
-        }
-
-        // we didn't get any packet
-        return false;
-    }
-
-private:
-    void initNormal() const {
-        CONSOLE_ADD("   * open BT... ");
-        m_btSerial->begin(57600, SERIAL_8N1);
-        delay(200);
-        CONSOLE_LINE("done");
-    }
-
-    /* Reconf Manually with:
-     *  $$$ SF,1\n SN,OneLife-Beats\n SP,1337\n ST,0\n SU,57.6\n ---\n
-     */
-    bool initReconfigure() const {
-        CONSOLE_LINE("   * reconfiguraton requested ");
-
-        // jump up to the modem speed, then move it to the target
-        if (true /*lowerBtSpeed*/) {
-            // start with the modem speed
-            CONSOLE_ADD("     * changing the BT modem speed to 57600.. ");
-            delay(1000);
-            m_btSerial->begin(115200); // the default speed for the Bluetooth controller
-            delay(1000);
-            m_btSerial->print("$");
-            m_btSerial->print("$");
-            m_btSerial->print("$");
-            delay(1000);
-            m_btSerial->println("U,57.6,N");
-            delay(1000);
-            CONSOLE_LINE("done");
-        }
-
-        // now open at the right speed
-        initNormal();
-
-        CONSOLE_ADD("   * reconfiguring BT... ");
-
-        // enter command mode
-        if (!writeAndConfirm("$$$", "CMD\r\n", 5, 1000))
-            return false;
-
-        // factory config
-        if (!writeAndConfirm("SF,1\n", "AOK\r\n", 5, 2000))
-            return false;
-
-        // rename device
-        if (!writeAndConfirm("SN,OneLife-Beats\n", "AOK\r\n", 5, 1000))
-            return false;
-
-        // set pin to 1337
-        if (!writeAndConfirm("SP,1337\n", "AOK\r\n", 5, 1000))
-            return false;
-
-        // turn config timer off
-        if (!writeAndConfirm("ST,0\n", "AOK\r\n", 5, 1000))
-            return false;
-
-        // set the default speed
-        if (!writeAndConfirm("SU,57.6\n", "AOK\r\n", 5, 1000))
-            return false;
-
-        // set the GPIO2 to Input, to not have the leds, which save power (restore with S%,0404)
-        if (!writeAndConfirm("S%,0400\n", "AOK\r\n", 5, 1000))
-            return false;
-
-        // go back to data mode
-        if (!writeAndConfirm("---\n", "END\r\n", 5, 1000))
-            return false;
-
-        CONSOLE_LINE("done.");
-        return true;
-    }
-
-    bool writeAndConfirm(const char *msg, const char *expected, int length, int timeoutMs) const {
-        m_btSerial->print(msg);
-        bool ok = (expected == 0) || matchReply(expected, length, timeoutMs);
-        if (!ok) {
-            CONSOLE_ADD(ok ? "   * BlueLink: wrote: '" : "   * BlueLink: exception writing: '");
-            CONSOLE_ADD(msg);
-            CONSOLE_LINE("'");
-        }
-        return ok;
-    }
-
-    bool matchReply(const char *expected, int length, int timeoutMs) const {
-        int sIdx = 0;
-        while (timeoutMs > 0) {
-            while (m_btSerial->available()) {
-                char c = (char) m_btSerial->read();
-                if (expected[sIdx] != c) {
-                    CONSOLE_ADD("   * BlueLink: expected ");
-                    CONSOLE_ADD((int) expected[sIdx]);
-                    CONSOLE_ADD(" gotten ");
-                    CONSOLE_ADD((int) c);
-                    CONSOLE_ADD(" at index ");
-                    CONSOLE_LINE((int) sIdx);
-                    return false;
-                }
-                sIdx++;
-                if (sIdx >= length)
-                    return true;
-            }
-            delay(1);
-            timeoutMs--;
-        }
-        return false;
-    }
-};
-
-void crossStreams(Stream *s1, Stream *s2) {
-    while (s1 && s1->available()) {
-        const char c1 = (char) s1->read();
-        if (s2)
-            s2->print(c1);
-    }
-    while (s2 && s2->available()) {
-        const char c2 = (char) s2->read();
-        if (s1)
-            s1->print(c2);
-    }
-}
-
-// Note, this class assumes that the max int value < MAX_INT / bufferSize
-class Averager {
-public:
-    Averager()
-            : m_buffer(0), m_bufferSize(0) {
-        resize(10);
-    }
-
-    void push(int value) {
-        if (++m_bufferPos >= m_bufferSize)
-            m_bufferPos = 0;
-        if (m_bufferPos < m_bufferSize && m_bufferPos)
-            m_buffer[m_bufferPos] = value;
-        if (m_bufferCount < m_bufferSize)
-            m_bufferCount++;
-    }
-
-    int computeAvg() {
-        if (m_bufferCount < 1 || m_bufferCount > m_bufferSize)
-            return -1;
-        long sum = 0;
-        for (int i = 0; i < m_bufferCount; ++i)
-            sum += m_buffer[i];
-        long avg = sum / (long) m_bufferCount;
-        return (int) avg;
-    }
-
-    void resize(int size) {
-        if (m_buffer)
-            delete[] m_buffer;
-        m_buffer = new int[size];
-        for (int i = 0; i < size; ++i)
-            m_buffer[i] = 0;
-        m_bufferSize = size;
-        m_bufferCount = 0;
-        m_bufferPos = -1;
-    }
-
-
-private:
-    int *m_buffer;
-    int m_bufferSize;
-    int m_bufferCount;
-    int m_bufferPos;
-
-};
-
-// runtime globals
-qduino sQduino;
+qduino *sQduino = 0;
 BlueLink *sBlueLink = 0;
 Averager *sAvg = 0;
-//EGauge sFuel;
-
-
+FuelGauge *sFuelGauge = 0;
 
 void setup() {
     // shorted to 3.3V or GND
@@ -313,17 +30,18 @@ void setup() {
     pinMode(9, INPUT);
     pinMode(12, INPUT);
 
-    // let the peripherials rest
-    delay(1000);
+    // let the peripherals rest
+    delay(2000);
 
     // console
-    initConsole();
+    Console::init();
     CONSOLE_LINE("HeartBeat Booting...");
 
     // init QDuino Fuel gauge and LED
     CONSOLE_LINE(" * init QDuino");
-    sQduino.setRGB(RED);
-    //sFuel.setup();
+    sQduino = new qduino();
+    sQduino->setRGB(RED);
+    sFuelGauge = new FuelGauge();
 
     // init i/os (and let them settle)
     CONSOLE_LINE(" * init I/O");
@@ -336,48 +54,112 @@ void setup() {
     sBlueLink->init();
 
     // init other
-    sAvg = new Averager();
-    sAvg->resize(100);
+    sAvg = new Averager(10);
 
     // complete Boot
     CONSOLE_LINE("APP Ready!");
-    sQduino.setRGB(GREEN);
+    sQduino->setRGB(GREEN);
 }
 
-void loop() {
-    // upper limit to 500Hz
-    delay(2);
-//  sFuel.showChargePulsedOnLed(&sQduino, 400);
-//  sFuel.showChargeOnConsole();
 
-    // uncomment this
-    //crossStreams(&APP_BLUETOOTH_SERIAL, &APP_CONSOLE);
+/**
+ * @brief The DemoMode class runs an automated demo sequence, taking control of the main system loop.
+ */
+#define DEMOMODE_SAMPLES_COUNT      170
+#define DEMOMODE_SAMPLES_FREQUENCY  200
 
-    bool isDiscLeft = digitalRead(A0);
-    bool isDiscRight = digitalRead(A1);
+class DemoMode {
+private:
+    // nice trace, 200Hz, 170 samples
+    int m_demoTrace[DEMOMODE_SAMPLES_COUNT] = { 500, 500, 499, 500, 503, 503, 500, 500, 501, 498, 498, 501, 500, 499, 502, 502, 499, 502, 503, 501, 500, 502, 501, 500, 501, 502, 506, 508, 504, 503, 502, 500, 499, 500, 501, 498, 497, 498, 501, 501, 501, 502, 502, 503, 503, 517, 549, 578, 582, 535, 449, 375, 352, 373, 384, 400, 442, 478, 500, 507, 507, 510, 516, 520, 520, 520, 526, 527, 524, 525, 526, 527, 530, 531, 530, 531, 533, 532, 531, 535, 537, 534, 534, 536, 535, 537, 538, 540, 541, 543, 545, 547, 549, 550, 552, 554, 554, 553, 552, 549, 545, 542, 537, 531, 525, 520, 514, 510, 507, 503, 500, 499, 499, 497, 496, 496, 495, 495, 496, 493, 493, 498, 499, 500, 500, 501, 502, 505, 505, 504, 503, 503, 503, 503, 507, 508, 508, 507, 507, 506, 506, 508, 509, 511, 512, 509, 509, 511, 511, 509, 509, 509, 507, 506, 507, 508, 508, 510, 509, 508, 508, 506, 505, 506, 506, 503, 503, 504, 501, 501 };
+    int m_readIdx;
 
-    int pulseVal = analogRead(A2);
-    if (sAvg) {
-        sAvg->push(pulseVal);
-        pulseVal = sAvg->computeAvg();
+public:
+    DemoMode()
+      : m_readIdx(0) {
     }
 
-    sBlueLink->rawPrintValue(pulseVal);
-    CONSOLE_LINE(pulseVal);
+    int analogReadSample() {
+        int val = m_demoTrace[m_readIdx];
+        if (++m_readIdx >= DEMOMODE_SAMPLES_COUNT)
+            m_readIdx = 0;
+        return val;
+    }
+
+    void captureTrace() {
+        // 5 seconds delay
+        CONSOLE_ADD("Capturing... ");
+        for (int i = 5; i > 0; i--) {
+            delay(1000);
+            CONSOLE_ADD(i);
+            CONSOLE_ADD(".. ");
+        }
+        // capture
+        for (int i = 0; i < DEMOMODE_SAMPLES_COUNT; i++) {
+            m_demoTrace[i] = analogRead(A2);
+            delay(1000 / DEMOMODE_SAMPLES_FREQUENCY);
+        }
+        CONSOLE_LINE("done");
+    }
+
+    void printTraceAsPlot() const {
+        for (int i = 0; i < DEMOMODE_SAMPLES_COUNT; i++) {
+            int pulseVal = 1023 - m_demoTrace[i];
+            CONSOLE_LINE(pulseVal);
+            delay(1000 / DEMOMODE_SAMPLES_FREQUENCY);
+        }
+    }
+
+    void printTraceAsArray() const {
+        for (int i = 0; i < DEMOMODE_SAMPLES_COUNT; i++) {
+            CONSOLE_ADD(m_demoTrace[i]);
+            CONSOLE_ADD(", ");
+        }
+    }
+};
 
 
+DemoMode *demo = new DemoMode();
+bool sLastDiscLeft;
+bool sLastDiscRight;
+int sLastPulseVal;
 
-    //CONSOLE_LINE(isDiscLeft);
-    //CONSOLE_LINE(isDiscRight);
+void loop() {
+    /* DEMO recording
+    if (demo) {
+        demo->captureTrace();
+        demo->printTraceAsArray();
+        demo->printTraceAsPlot();
+        delay(1000);
+        return;
+    }*/
 
-/*  int val1 = analogRead(A2);
-      Serial.print(val1);
+    // upper limit to 500Hz
+    delay(2);
 
-      Serial.print(" ");
-      Serial.print();
+    //sFuelGauge->showChargePulsedOnQduino(sQduino, 400);
+    //sFuelGauge->showChargeOnConsole(&APP_CONSOLE);
 
-      Serial.print(" ");
-      Serial.print(digitalRead(A1));
-    Serial.println(".");*/
+    // uncomment this to talk from the USB Console to the Bluetooth Modem
+    //Streams::cross(&APP_BLUETOOTH_SERIAL, &APP_CONSOLE);
+
+    if (demo) {
+        sLastDiscLeft = false;
+        sLastDiscRight = false;
+        sLastPulseVal = 1023 - demo->analogReadSample();
+    } else {
+        sLastDiscLeft = digitalRead(A0);
+        sLastDiscRight = digitalRead(A1);
+        sLastPulseVal = 1023 - analogRead(A2);
+    }
+
+    CONSOLE_LINE(sLastPulseVal);
+    
+    if (sAvg) {
+        sAvg->push(sLastPulseVal);
+        sLastPulseVal = sAvg->computeAvg();
+    }
+
+    //sBlueLink->rawPrintValue(pulseVal);
 }
 
