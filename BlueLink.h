@@ -5,7 +5,7 @@
 #ifndef H_ART_BLUELINK_H
 #define H_ART_BLUELINK_H
 
-#include "Arduino.h"
+#include <Arduino.h>
 
 /**
  * @brief The BlueLink class communicates via a Blueetooth dongle
@@ -21,15 +21,21 @@ public:
 
     void init() const;
 
-    void rawPrintValue(int value) const;
-
     /**
-     * @brief readPacket Decodes an incoming instruction packet transmission. Enrico's standard.
+     * Decodes an incoming instruction packet transmission. Enrico's standard.
      * @param destBuffer a pointer to at least maxLength chars
      * @param maxLength of the destination command (the src packet has 1 sync byte too)
      * @return true if one or more packets have been decoded (just the last is kept though)
      */
-    bool readPacket(byte *destBuffer, int maxLength);
+    bool readCommandPacket(byte *destBuffer, int maxLength);
+
+    /**
+     * Sends a full raw packet to the connected device
+     * NOTE: if a device is not connected, this has the potential of breaking the BT command/control
+     *       pattern ($$$) and messing up with the comm.
+     * No idea how to check if a BT device is connected...
+     */
+    bool sendSlavePacket(const byte *srcBuffer, size_t srcBufferLength);
 
 private:
     void initNormal() const;

@@ -5,17 +5,18 @@
 #ifndef H_ART_QD_FUELGAUGE_H
 #define H_ART_QD_FUELGAUGE_H
 
-class qduino;
-class fuelGauge;
 class Stream;
+
+class fuelGauge;
+
+class qduino;
 
 /*
  * will use the global 'Wire', embed a 'fuelGauge' instance
  */
 class FuelGauge {
 public:
-    FuelGauge();
-    ~FuelGauge();
+    static FuelGauge *instance();
 
     int measureChargeSinceLastReset();
 
@@ -23,10 +24,14 @@ public:
 
     void showChargePulsedOnQduino(qduino *q, int pulseDuration);
 
+
 private:
-    fuelGauge *m_battery;
+    FuelGauge();
+    ~FuelGauge();
 
     void pulseLed(qduino *q, int n, int pulseLengthMs, int color);
+
+    fuelGauge *m_battery;
 };
 
 #endif //H_ART_QD_FUELGAUGE_H

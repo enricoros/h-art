@@ -1,25 +1,19 @@
-/* Enrico's Code */
+//
+// Created by Enrico on 6/15/2016.
+//
 
-#include "Arduino.h"
+#include <Arduino.h>
+#include <Qduino.h>
 
-// Console - configured in Console.h
-#include "Console.h"
-
-// Bluetooth operation
 #include "BlueLink.h"
-
-#define APP_BLUETOOTH_SERIAL  Serial1
-
-// QDuino specific
-#include "Qduino.h"
-#include "QD_FuelGauge.h"
-
-// signal processing
+#include "Console.h"
+#include "FuelGauge.h"
 #include "Signals.h"
 
 // configuration
+#define APP_BLUETOOTH_SERIAL    Serial1
 #define APP_REPLAY_DEMO_DATA
-#define MASTER_LOOP_DELAY     2  // 2ms = 500Hz
+#define MASTER_LOOP_DELAY       2  // 2ms = 500Hz
 
 
 /**
@@ -27,14 +21,14 @@
  */
 #define DEMOMODE_SAMPLES_COUNT      170
 #define DEMOMODE_SAMPLES_FREQUENCY  200
-class DemoMode {
+class SignalRecorder {
 private:
     // nice trace, 200Hz, 170 samples
     int m_demoTrace[DEMOMODE_SAMPLES_COUNT] = { 500, 500, 499, 500, 503, 503, 500, 500, 501, 498, 498, 501, 500, 499, 502, 502, 499, 502, 503, 501, 500, 502, 501, 500, 501, 502, 506, 508, 504, 503, 502, 500, 499, 500, 501, 498, 497, 498, 501, 501, 501, 502, 502, 503, 503, 517, 549, 578, 582, 535, 449, 375, 352, 373, 384, 400, 442, 478, 500, 507, 507, 510, 516, 520, 520, 520, 526, 527, 524, 525, 526, 527, 530, 531, 530, 531, 533, 532, 531, 535, 537, 534, 534, 536, 535, 537, 538, 540, 541, 543, 545, 547, 549, 550, 552, 554, 554, 553, 552, 549, 545, 542, 537, 531, 525, 520, 514, 510, 507, 503, 500, 499, 499, 497, 496, 496, 495, 495, 496, 493, 493, 498, 499, 500, 500, 501, 502, 505, 505, 504, 503, 503, 503, 503, 507, 508, 508, 507, 507, 506, 506, 508, 509, 511, 512, 509, 509, 511, 511, 509, 509, 509, 507, 506, 507, 508, 508, 510, 509, 508, 508, 506, 505, 506, 506, 503, 503, 504, 501, 501 };
     int m_readIdx;
 
 public:
-    DemoMode()
+    SignalRecorder()
       : m_readIdx(0) {
     }
 
@@ -80,8 +74,7 @@ public:
 qduino *sQduino = 0;
 BlueLink *sBlueLink = 0;
 Averager *sAvg = 0;
-FuelGauge *sFuelGauge = 0;
-DemoMode *sDemoMode = 0;
+SignalRecorder *sSignalRecorder = 0;
 
 
 void setup() {
@@ -102,7 +95,6 @@ void setup() {
     CONSOLE_LINE(" * init QDuino");
     sQduino = new qduino();
     sQduino->setRGB(RED);
-    sFuelGauge = new FuelGauge();
 
     // init i/os (and let them settle)
     CONSOLE_LINE(" * init I/O");
@@ -123,7 +115,7 @@ void setup() {
 
     // TEMP - FIXME - actually start the demo mode (replays recorded data)
 #if defined(APP_REPLAY_DEMO_DATA)
-    sDemoMode = new DemoMode();
+    sSignalRecorder = new SignalRecorder();
 #endif
 }
 
@@ -142,16 +134,24 @@ byte sBTCommandBuffer[4];
 bool readConsoleCommand(Stream *stream);
 bool executeCommandPacket(const byte *command);
 
+class SingnalProcessor {
+
+};
+
+
+
+int tmp_min = 999;
+int tmp_max = 0;
 void loop() {
     // uncomment to enable a direct talk from the USB Console to the Bluetooth Modem
     //Streams::cross(&APP_BLUETOOTH_SERIAL, &APP_CONSOLE);
     //return;
 
     // uncomment to enable signal recording with console output/plot
-    /*if (sDemoMode) {
-        sDemoMode->captureTrace();
-        sDemoMode->printTraceAsArray();
-        sDemoMode->printTraceAsPlot();
+    /*if (sSignalRecorder) {
+        sSignalRecorder->captureTrace();
+        sSignalRecorder->printTraceAsArray();
+        sSignalRecorder->printTraceAsPlot();
         delay(1000);
         return;
     }*/
@@ -162,7 +162,7 @@ void loop() {
 
     // check the BT serial for new commands
     bool hasNewCommand = false;
-    if (sBlueLink->readPacket(sBTCommandBuffer, 4))
+    if (sBlueLink->readCommandPacket(sBTCommandBuffer, 4))
         hasNewCommand = true;
 
 #if defined(APP_CONSOLE)
@@ -180,29 +180,39 @@ void loop() {
     bool sLastDiscLeft;
     bool sLastDiscRight;
     int sLastPulseVal;
-    if (sDemoMode) {
+    if (sSignalRecorder) {
         sLastDiscLeft = false;
         sLastDiscRight = false;
-        sLastPulseVal = 1023 - sDemoMode->analogReadSample();
+        sLastPulseVal = 1023 - sSignalRecorder->analogReadSample();
     } else {
         sLastDiscLeft = digitalRead(A0);
         sLastDiscRight = digitalRead(A1);
         sLastPulseVal = 1023 - analogRead(A2);
     }
-    
+
     if (sAvg) {
         sAvg->push(sLastPulseVal);
         sLastPulseVal = sAvg->computeAvg();
     }
 
     //CONSOLE_LINE(sLastPulseVal);
-    
+
     //sBlueLink->rawPrintValue(pulseVal);
+
+    int scval = (1023 - sLastPulseVal) >> 0;
+    if (scval < tmp_min)
+        tmp_min = scval;
+    scval -= tmp_min;
+    if (scval > 255)
+        scval = 255;
+
+    analogWrite(13, scval);
+    //CONSOLE_LINE(scval);
 
     // if enable, check continuously for fuel
     if (tmp_checkFuel && !--tmp_fuelSkipper) {
-        sFuelGauge->showChargePulsedOnQduino(sQduino, 400);
-        sFuelGauge->showChargeOnConsole(&APP_CONSOLE);
+        FuelGauge::instance()->showChargePulsedOnQduino(sQduino, 400);
+        //FuelGauge::instance()->showChargeOnConsole(&APP_CONSOLE);
         tmp_fuelSkipper = 2000;
     }
 
@@ -210,10 +220,12 @@ void loop() {
     delay(MASTER_LOOP_DELAY);
 
     // save energy, stop the LED now
-    if (hasNewCommand)
-        sQduino->ledOff();
+   // if (hasNewCommand)
+   //     sQduino->ledOff();
 }
 
+#pragma clang diagnostic push
+#pragma ide diagnostic ignored "missing_default_case"
 bool executeCommandPacket(const byte *msg) {
     const byte rCmd    = msg[0];
     const byte rTarget = msg[1];
@@ -221,31 +233,41 @@ bool executeCommandPacket(const byte *msg) {
     const byte rValue2 = msg[3];
 
     switch (rCmd) {
-    // C: 01 -> set ...(target: 1,2, rValue1: ... [0..200])
-    case 0x01:
-        switch (rTarget) {
-        case 1: return true;
-        case 2: return true;
-        }; break;
+        case 0x01: { // C: 01 -> read variable
+            int variableValue = 0;
+            switch (rTarget) {
+                case 1:
+                    variableValue = FuelGauge::instance()->measureChargeSinceLastReset();
+                    break;
+                case 2:
+                    variableValue = tmp_checkFuel;
+                    break;
+            };
+            const byte slavePacket[4] = {0x01, rTarget, (const byte) (variableValue & 0xff),
+                                         (const byte) ((variableValue >> 8) & 0xff)};
+            sBlueLink->sendSlavePacket(slavePacket, 4);
+        }; return true;
 
-    // C: 02 -> set ears pairs (target ignored)
-    case 0x02: {
-        } return true;
+        case 0x02: // C: 02 -> set variable
+            switch (rTarget) {
+                case 2:
+                    tmp_checkFuel = rValue1;
+                    if (tmp_checkFuel) {
+                        FuelGauge::instance()->showChargePulsedOnQduino(sQduino, 400);
+                        FuelGauge::instance()->showChargeOnConsole(&APP_CONSOLE);
+                    } else
+                        CONSOLE_LINE("FG OFF");
+                    return true;
+            };
+            break;
 
-    // C: 03 -> read Battery Level
-    case 0x03:
-        if (sFuelGauge) {
-            int value = sFuelGauge->measureChargeSinceLastReset();
-            // TODO: SEND IT BACK
-            //sFuelGauge->showChargePulsedOnQduino(sQduino, 400);
-            //sFuelGauge->showChargeOnConsole(&APP_CONSOLE);
-        } return true;
-        
-    // C: 04 -> set Variables
-    case 0x04:
-        switch (rTarget) {
-        case 1: tmp_checkFuel = rValue1; return true;
-        }; break;
+        case 0x03: // C: 03 -> set led
+            sQduino->setRGB(rTarget, rValue1, rValue2);
+            return true;
+
+        case 0x04: // C: 04 -> start/stop sampling
+            CONSOLE_LINE("not implemented");
+            return true;
     }
 
     // bad command
@@ -253,21 +275,23 @@ bool executeCommandPacket(const byte *msg) {
     CONSOLE_LINE((int)rCmd);
     return false;
 }
+#pragma clang diagnostic pop
 
+
+byte cool = 0;
 bool readConsoleCommand(Stream *stream, byte *cmdBuffer) {
     while (stream->available()) {
         char c = (char)stream->read();
         switch (c) {
+        case 'l': case 'L': cmdBuffer[0] = 3; cmdBuffer[1] = 255; cmdBuffer[2] = 0; cmdBuffer[3] = 0; return true;
+        case 'm': case 'M': analogWrite(10, 100); return false;
+        case 'n': case 'N': analogWrite(10, 0); return false;
         case 'f': case 'F':
-            cmdBuffer[0] = 4; cmdBuffer[1] =   1; cmdBuffer[2] = tmp_checkFuel ? 0 : 1; return true;
+            cmdBuffer[0] = 2; cmdBuffer[1] =   2; cmdBuffer[2] = tmp_checkFuel ? 0 : 1; return true;
         case 'u': case 'U':
             cmdBuffer[0] = 2; cmdBuffer[2] = 200; cmdBuffer[3] = 200; return true;
-        case 'm': case 'M':
-            cmdBuffer[0] = 2; cmdBuffer[2] = 100; cmdBuffer[3] = 100; return true;
         case 'd': case 'D':
             cmdBuffer[0] = 5; cmdBuffer[2] =   0; cmdBuffer[3] =   0; return true;
-        case 'l': case 'L':
-            cmdBuffer[0] = 2; cmdBuffer[2] = 200; cmdBuffer[3] =  50; return true;
         case 'r': case 'R':
             cmdBuffer[0] = 2; cmdBuffer[2] =  50; cmdBuffer[3] = 200; return true;
         }

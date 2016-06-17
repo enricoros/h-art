@@ -11,18 +11,14 @@ BlueLink::BlueLink(HardwareSerial *btSerial)
 
 void BlueLink::init() const {
     // check if the user requested to reconfigure
+    // TODO: FIXME this
     //if (digitalRead(LILY_PIN_BT_RECONFIG) == LOW)
     //    initReconfigure();
     //else
     initNormal();
 }
 
-void BlueLink::rawPrintValue(int value) const {
-    m_btSerial->print(value);
-    m_btSerial->print(" ");
-}
-
-bool BlueLink::readPacket(byte *destBuffer, int maxLength) {
+bool BlueLink::readCommandPacket(byte *destBuffer, int maxLength) {
     // we need maxLength + 1 sync byte
     while (m_btSerial->available() >= (maxLength + 1)) {
         // validate the sync byte
@@ -47,6 +43,20 @@ bool BlueLink::readPacket(byte *destBuffer, int maxLength) {
     // we didn't get any packet
     return false;
 }
+
+bool BlueLink::sendSlavePacket(const byte *srcBuffer, size_t srcBufferLength) {
+    if (!m_btSerial->availableForWrite()) {
+        CONSOLE_LINE("bt_cant_wrt");
+        return false;
+    }
+    int wroteCount = m_btSerial->write(srcBuffer, srcBufferLength);
+    if (wroteCount < srcBufferLength) {
+        CONSOLE_LINE("bt_part_wrt");
+        return false;
+    }
+    return true;
+}
+
 
 void BlueLink::initNormal() const {
     CONSOLE_ADD("   * open BT... ");
