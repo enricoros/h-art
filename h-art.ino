@@ -210,7 +210,6 @@ void loop() {
     // if enable, check continuously for fuel
     if (tmp_checkFuel && !--tmp_fuelSkipper) {
         QD::FuelGauge::showChargePulsedOnTricolor(400);
-        //QD::FuelGauge::showChargeOnConsole(&APP_CONSOLE);
         tmp_fuelSkipper = 2000;
     }
 
@@ -231,7 +230,15 @@ bool executeCommandPacket(const byte *msg) {
     const byte rValue2 = msg[3];
 
     switch (rCmd) {
-        case 0x01: { // C: 01 -> read variable
+        case 0x01: // C: 01 -> set user led override
+            TricolorLED::overrideUserRGB(rTarget, rValue1, rValue2);
+            return true;
+
+        case 0x02: // C: 02 -> clear user led override
+            TricolorLED::clearUserRGBOverride();
+            return true;
+
+        case 0x03: { // C: 03 -> read variable
             int variableValue = 0;
             switch (rTarget) {
                 case 1:
@@ -246,14 +253,13 @@ bool executeCommandPacket(const byte *msg) {
             sBlueLink->sendSlavePacket(slavePacket, 4);
         }; return true;
 
-        case 0x02: // C: 02 -> set variable
+        case 0x04: // C: 04 -> set variable
             switch (rTarget) {
                 case 2:
                     tmp_checkFuel = rValue1;
-                    if (tmp_checkFuel) {
-                        QD::FuelGauge::showChargePulsedOnTricolor(400);
+                    if (tmp_checkFuel)
                         QD::FuelGauge::showChargeOnConsole(&APP_CONSOLE);
-                    } else
+                    else
                         CONSOLE_LINE("FG OFF");
                     return true;
                 case 3:
@@ -262,11 +268,7 @@ bool executeCommandPacket(const byte *msg) {
             };
             break;
 
-        case 0x03: // C: 03 -> set led
-            TricolorLED::overrideUserRGB(rTarget, rValue1, rValue2);
-            return true;
-
-        case 0x04: // C: 04 -> start/stop sampling
+        case 0x5: // C: 05 -> start/stop sampling
             CONSOLE_LINE("not implemented");
             return true;
     }
@@ -282,9 +284,9 @@ bool readConsoleCommand(Stream *stream, byte *cmdBuffer) {
     while (stream->available()) {
         char c = (char)stream->read();
         switch (c) {
-            case 'l': case 'L': cmdBuffer[0] = 3; cmdBuffer[1] = 255; cmdBuffer[2] = 25; cmdBuffer[3] = 100; return true;
-            case 'm': case 'M': cmdBuffer[0] = 2; cmdBuffer[1] = 3; return true;
-            case 'f': case 'F': cmdBuffer[0] = 2; cmdBuffer[1] = 2; cmdBuffer[2] = tmp_checkFuel ? 0 : 1; return true;
+            case 'l': case 'L': cmdBuffer[0] = 1; cmdBuffer[1] = 255; cmdBuffer[2] = 25; cmdBuffer[3] = 100; return true;
+            case 'm': case 'M': cmdBuffer[0] = 2; return true;
+            case 'f': case 'F': cmdBuffer[0] = 4; cmdBuffer[1] = 2; cmdBuffer[2] = tmp_checkFuel ? 0 : 1; return true;
         }
     }
     return false;
