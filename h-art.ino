@@ -3,12 +3,12 @@
 //
 
 #include <Arduino.h>
-#include <Qduino.h>
 
 #include "BlueLink.h"
 #include "Console.h"
 #include "FuelGauge.h"
 #include "Signals.h"
+#include "TricolorLED.h"
 
 // configuration
 #define APP_BLUETOOTH_SERIAL    Serial1
@@ -71,7 +71,6 @@ public:
 };
 
 
-qduino *sQduino = 0;
 BlueLink *sBlueLink = 0;
 Averager *sAvg = 0;
 SignalRecorder *sSignalRecorder = 0;
@@ -91,10 +90,10 @@ void setup() {
     Console::init();
     CONSOLE_LINE("HeartBeat Booting...");
 
-    // init QDuino Fuel gauge and LED
+    // init QDuino LED - Fuel Gauge is not inited here - the chip is dormant until the first read
     CONSOLE_LINE(" * init QDuino");
-    sQduino = new qduino();
-    sQduino->setRGB(RED);
+    TricolorLED::init();
+    TricolorLED::setUserRGB(TricolorLED::RED);
 
     // init i/os (and let them settle)
     CONSOLE_LINE(" * init I/O");
@@ -111,7 +110,7 @@ void setup() {
 
     // complete Boot
     CONSOLE_LINE("HeartBeat ready.");
-    sQduino->setRGB(GREEN);
+    TricolorLED::setUserRGB(TricolorLED::BLACK);
 
     // TEMP - FIXME - actually start the demo mode (replays recorded data)
 #if defined(APP_REPLAY_DEMO_DATA)
@@ -126,8 +125,8 @@ int sReportingFrequency;
 int sSamplesPerReport;
 bool sFilterAverage;
 int sFilterAverageLength;
-bool tmp_checkFuel=false;
-int tmp_fuelSkipper=2000;
+bool tmp_checkFuel = false;
+int tmp_fuelSkipper = 2000;
 // runtime globals
 byte sBTCommandBuffer[4];
 
@@ -139,9 +138,9 @@ class SingnalProcessor {
 };
 
 
-
 int tmp_min = 999;
 int tmp_max = 0;
+
 void loop() {
     // uncomment to enable a direct talk from the USB Console to the Bluetooth Modem
     //Streams::cross(&APP_BLUETOOTH_SERIAL, &APP_CONSOLE);
@@ -174,7 +173,7 @@ void loop() {
     // execute a command, when received (and blink the LED)
     if (hasNewCommand)
         if (executeCommandPacket(sBTCommandBuffer))
-            sQduino->setRGB(RED);
+            TricolorLED::setUserRGB(TricolorLED::RED);
 
     // perform the current Mode/Task/Operation
     bool sLastDiscLeft;
@@ -199,20 +198,19 @@ void loop() {
 
     //sBlueLink->rawPrintValue(pulseVal);
 
-    int scval = (1023 - sLastPulseVal) >> 0;
+    int scval = (sLastPulseVal) >> 0;
     if (scval < tmp_min)
         tmp_min = scval;
     scval -= tmp_min;
     if (scval > 255)
         scval = 255;
 
-    analogWrite(13, scval);
-    //CONSOLE_LINE(scval);
+    TricolorLED::setUserBlue(scval);
 
     // if enable, check continuously for fuel
     if (tmp_checkFuel && !--tmp_fuelSkipper) {
-        FuelGauge::instance()->showChargePulsedOnQduino(sQduino, 400);
-        //FuelGauge::instance()->showChargeOnConsole(&APP_CONSOLE);
+        QD::FuelGauge::showChargePulsedOnTricolor(400);
+        //QD::FuelGauge::showChargeOnConsole(&APP_CONSOLE);
         tmp_fuelSkipper = 2000;
     }
 
@@ -220,8 +218,8 @@ void loop() {
     delay(MASTER_LOOP_DELAY);
 
     // save energy, stop the LED now
-   // if (hasNewCommand)
-   //     sQduino->ledOff();
+    if (hasNewCommand)
+        TricolorLED::setUserRGB(TricolorLED::BLACK);
 }
 
 #pragma clang diagnostic push
@@ -237,7 +235,7 @@ bool executeCommandPacket(const byte *msg) {
             int variableValue = 0;
             switch (rTarget) {
                 case 1:
-                    variableValue = FuelGauge::instance()->measureChargeSinceLastReset();
+                    variableValue = QD::FuelGauge::measureChargeSinceLastReset();
                     break;
                 case 2:
                     variableValue = tmp_checkFuel;
@@ -253,16 +251,19 @@ bool executeCommandPacket(const byte *msg) {
                 case 2:
                     tmp_checkFuel = rValue1;
                     if (tmp_checkFuel) {
-                        FuelGauge::instance()->showChargePulsedOnQduino(sQduino, 400);
-                        FuelGauge::instance()->showChargeOnConsole(&APP_CONSOLE);
+                        QD::FuelGauge::showChargePulsedOnTricolor(400);
+                        QD::FuelGauge::showChargeOnConsole(&APP_CONSOLE);
                     } else
                         CONSOLE_LINE("FG OFF");
+                    return true;
+                case 3:
+                    TricolorLED::clearUserRGBOverride();
                     return true;
             };
             break;
 
         case 0x03: // C: 03 -> set led
-            sQduino->setRGB(rTarget, rValue1, rValue2);
+            TricolorLED::overrideUserRGB(rTarget, rValue1, rValue2);
             return true;
 
         case 0x04: // C: 04 -> start/stop sampling
@@ -272,30 +273,19 @@ bool executeCommandPacket(const byte *msg) {
 
     // bad command
     CONSOLE_ADD("bt_bad_cmd: ");
-    CONSOLE_LINE((int)rCmd);
+    CONSOLE_LINE((int) rCmd);
     return false;
 }
 #pragma clang diagnostic pop
 
-
-byte cool = 0;
 bool readConsoleCommand(Stream *stream, byte *cmdBuffer) {
     while (stream->available()) {
         char c = (char)stream->read();
         switch (c) {
-        case 'l': case 'L': cmdBuffer[0] = 3; cmdBuffer[1] = 255; cmdBuffer[2] = 0; cmdBuffer[3] = 0; return true;
-        case 'm': case 'M': analogWrite(10, 100); return false;
-        case 'n': case 'N': analogWrite(10, 0); return false;
-        case 'f': case 'F':
-            cmdBuffer[0] = 2; cmdBuffer[1] =   2; cmdBuffer[2] = tmp_checkFuel ? 0 : 1; return true;
-        case 'u': case 'U':
-            cmdBuffer[0] = 2; cmdBuffer[2] = 200; cmdBuffer[3] = 200; return true;
-        case 'd': case 'D':
-            cmdBuffer[0] = 5; cmdBuffer[2] =   0; cmdBuffer[3] =   0; return true;
-        case 'r': case 'R':
-            cmdBuffer[0] = 2; cmdBuffer[2] =  50; cmdBuffer[3] = 200; return true;
+            case 'l': case 'L': cmdBuffer[0] = 3; cmdBuffer[1] = 255; cmdBuffer[2] = 25; cmdBuffer[3] = 100; return true;
+            case 'm': case 'M': cmdBuffer[0] = 2; cmdBuffer[1] = 3; return true;
+            case 'f': case 'F': cmdBuffer[0] = 2; cmdBuffer[1] = 2; cmdBuffer[2] = tmp_checkFuel ? 0 : 1; return true;
         }
     }
     return false;
 }
-

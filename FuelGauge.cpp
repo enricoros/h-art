@@ -3,55 +3,40 @@
 //
 
 #include "FuelGauge.h"
-#include <QDuino.h>
+#include "TricolorLED.h"
+#include <Qduino.h>
 #include <Wire.h>
 
-static FuelGauge *sFuelGaugeInstance;
-FuelGauge *FuelGauge::instance() {
-    if (!sFuelGaugeInstance)
-        sFuelGaugeInstance = new FuelGauge();
-    return sFuelGaugeInstance;
-}
+static fuelGauge *sFuelGauge = 0;
 
-
-FuelGauge::FuelGauge() {
-    Wire.begin();
-    m_battery = new fuelGauge();
-    // setup fuel gauge (includes reset)
-    m_battery->setup();
-    delay(200);
-}
-
-FuelGauge::~FuelGauge() {
-    delete m_battery;
-}
-
-
-int FuelGauge::measureChargeSinceLastReset() {
-    int charge = m_battery->chargePercentage();  // get %
+int ::QD::FuelGauge::measureChargeSinceLastReset() {
+    if (!sFuelGauge) {
+        Wire.begin();
+        sFuelGauge = new fuelGauge();
+        // setup fuel gauge (includes reset)
+        sFuelGauge->setup();
+        // delay to let the Fuel Gauge perform the first reading
+        delay(200);
+    }
+    int chargePct = sFuelGauge->chargePercentage();  // get %
     //m_battery->reset();  // reset for next data request
-    return charge;
+    return chargePct;
 }
 
-void FuelGauge::showChargeOnConsole(Stream *console) {
+void ::QD::FuelGauge::showChargeOnConsole(Stream *console) {
     int charge = measureChargeSinceLastReset();
     console->print(charge);
     console->println("%");
 }
 
-void FuelGauge::showChargePulsedOnQduino(qduino *q, int pulseDuration) {
+void ::QD::FuelGauge::showChargePulsedOnTricolor(int pulseDuration) {
     int charge = measureChargeSinceLastReset();
-    if (charge >= 50)
-        pulseLed(q, (charge - 50) / 10 + 1, pulseDuration, GREEN);
-    else
-        pulseLed(q, (50 - charge) / 10 + 1, pulseDuration, RED);
-}
-
-void FuelGauge::pulseLed(qduino *q, int n, int pulseLengthMs, int color) {
+    int n = (charge >= 50) ? ((charge - 50) / 10 + 1) : ((50 - charge) / 10 + 1);
+    TricolorLED::Color color = (charge >= 50) ? TricolorLED::GREEN : TricolorLED::RED;
     while (n--) {
-        q->setRGB((COLORS) color);
-        delay((unsigned long) (pulseLengthMs / 2));
-        q->ledOff();
-        delay((unsigned long) (pulseLengthMs / 2));
+        TricolorLED::setUserRGB(color);
+        delay((unsigned long) (pulseDuration / 2));
+        TricolorLED::setUserRGB(TricolorLED::BLACK);
+        delay((unsigned long) (pulseDuration / 2));
     }
 }
